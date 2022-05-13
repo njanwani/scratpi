@@ -19,10 +19,10 @@
   <node name="odometry" pkg="me169" type="odometry.py" />
 
   <!-- Start the planning. -->
-  <node name="planner" pkg="me169" type="simpledriver.py" />
+  <node name="planner" pkg="me169" type="simpledriver.py" output = "screen" />
 
   <!-- Start the localization. -->
-  <node name="localize" pkg="me169" type="localize.py" output = "screen" />
+  <node name="localize" pkg="me169" type="localize.py" />
 
 
   <!-- Start the RealSense. This is *not* enabling the pointcloud -->

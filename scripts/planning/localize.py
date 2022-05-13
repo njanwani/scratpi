@@ -24,11 +24,11 @@ from geometry_msgs.msg import PoseArray, PoseStamped, Point, Quaternion, Twist, 
 
 
 WALLTHRESHOLD = 0.1
-FRACTIONAL_SCALE = 1.0
-FRACTIONAL_SCALE_THETA = 1.0
+FRACTIONAL_SCALE = 1.0 / 10.0
+FRACTIONAL_SCALE_THETA = 2.0 / 10.0
 MAX_CART_SCALE = 0.03
 MAX_THETA_SCALE = np.pi / 20.0
-THROTTLE = 0.0005
+THROTTLE = 0.00075
 GRID_X = -3.8100
 GRID_Y = -3.8100
 GRID_THETA = 0.0
@@ -96,6 +96,7 @@ class Localize:
         # Set up publishers/subscribers
         rospy.Subscriber("/odom", Odometry, self.cb_odom)
         self.pose_pub = rospy.Publisher("/pose", PoseStamped, queue_size=10)
+        self.pose_desired_pub = rospy.Publisher("/pose_desired", PoseStamped, queue_size=10)
         rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.cb_initial_pose)
         rospy.Subscriber("/scan", LaserScan, self.cb_laser)
         self.array_pub = rospy.Publisher("/posearray", PoseArray)
@@ -111,6 +112,13 @@ class Localize:
         print('Made array with dimensions', np.shape(self.wallptmap), '...')
         print('Done :)')
 
+        # newgrid = np.zeros_like(self.wallptmap)
+        # newgrid = self.wallptmap[:, :, 0]**2 + self.wallptmap[:, :, 1]**2
+        # import matplotlib.pyplot as plt
+        # plt.figure()
+        # plt.imshow(newgrid)
+        # plt.show()
+
         # with open("/home/kpochana/robotws/src/me169/data/wallptmap.csv", 'w') as csvfile:
         #     writer = csv.writer(csvfile, delimiter=",",lineterminator="\n")
         #     for v in range(self.h):
@@ -122,8 +130,7 @@ class Localize:
         self.d_x = 0.0
         self.d_y = 0.0
         self.pt_map_laser = None
-        # TODO: adjust this resolution!!!
-        self.contlocal = True
+        # self.contlocal = True
 
         print("Done initializing localization.")
 
@@ -209,15 +216,15 @@ class Localize:
             # print(self.pt_odom_laser.x(), self.pt_odom_laser.y())
             self.pt_map_laser = self.pt_map_odom * self.pt_odom_laser #* PlanarTransform.basic(0.0, 0.0, -np.pi / 2.0)
             # print(self.pt_map_laser)
-            
+            counter = 0
             if (self.contlocal and self.counter % self.localize_rate == 0):
                 # print("localizing...")
                 r = np.zeros((2, 0))
                 p = np.zeros((2, 0))
                 ranges = msg.ranges
-                angles = np.arange(msg.angle_min, msg.angle_max + msg.angle_increment, msg.angle_increment)
+                angles = np.arange(msg.angle_min, msg.angle_max + msg.angle_increment, msg.angle_increment)[::5]
 
-                for i, range in enumerate(ranges):
+                for i, range in enumerate(ranges[::5]):
                     if range > msg.range_min and range < (msg.range_max / 2.0):
                         y = range * np.sin(angles[i])
                         x = range * np.cos(angles[i])
@@ -235,18 +242,29 @@ class Localize:
                         v = int((r_y - GRID_Y) / self.resolution)
                         try:
                             p_uv = self.nearestwallpt(u, v)
-                            p_x = float(p_uv[0]) * self.resolution + GRID_X
-                            p_y = float(p_uv[1]) * self.resolution + GRID_Y
+                            p_x = float(p_uv[0] + 0.5) * self.resolution + GRID_X
+                            p_y = float(p_uv[1] + 0.5) * self.resolution + GRID_Y
                             p = np.hstack([p, np.array([[p_x], [p_y]])])
                             r = np.hstack([r, np.array([[r_x], [r_y]])])
+                            counter += 1
+                            # if counter > 3:
+                            #     break
                         except:
                             continue
                 
                 poses = []
-                for wallpt in np.swapaxes(p, 0, 1):
+                density = 5
+                for i, wallpt in enumerate(np.swapaxes(p, 0, 1)):
+                    if i % density != 0:
+                        continue
                     pose = Pose()
-                    pose.position = Point(wallpt[0], wallpt[1], 0.0)
-                    pose.orientation = Quaternion(0.0, 0.0, math.sin(0.0), math.cos(0.0))
+                    pose.position = Point(r[0][i], r[1][i], 0.0)
+                    try:
+                        theta = np.arctan2((wallpt[1] - r[1][i]), (wallpt[0] - r[0][i]))
+                    except:
+                        print("Catch divide by zero")
+                        continue
+                    pose.orientation = Quaternion(0.0, 0.0, math.sin(theta / 2.0), math.cos(theta / 2.0))
                     poses.append(pose)
 
                 poses_msg = PoseArray()
@@ -261,13 +279,31 @@ class Localize:
                 dx = self.bound(MAX_CART_SCALE, self.d_x * FRACTIONAL_SCALE)
                 dy = self.bound(MAX_CART_SCALE, self.d_y * FRACTIONAL_SCALE)
                 dtheta = self.bound(MAX_THETA_SCALE, self.d_theta * FRACTIONAL_SCALE_THETA)
+
                 if (np.linalg.norm(np.array([dx, dy, dtheta])) < THROTTLE):
                     dx = 0.0
                     dy = 0.0
                     dtheta = 0.0
+
                 print(dx, dy, dtheta)
                 # print("BEFORE:", self.pt_map_base)
-                self.pt_map_base = PlanarTransform.basic(dx, dy, 0.0) * self.pt_map_base * PlanarTransform.basic(0.0, 0.0, dtheta)
+                # Publish the transformed position
+                desired_dir_msg =                   PoseStamped()
+                # msg.header =            header
+                desired_dir_msg.header.stamp =      rospy.Time.now()
+                desired_dir_msg.header.frame_id =   "map"
+                desired_dir_msg.pose.position =      Point(self.pt_map_base.x(),
+                                                           self.pt_map_base.y(),
+                                                           0.0)
+                
+                desired_theta = np.arctan2(dy, dx)
+                desired_dir_msg.pose.orientation =   Quaternion(0.0,
+                                                                0.0,
+                                                                np.sin(desired_theta / 2.0), 
+                                                                np.cos(desired_theta / 2.0))
+                self.pose_desired_pub.publish(desired_dir_msg)
+
+                self.pt_map_base = PlanarTransform.basic(dx, dy, dtheta) * self.pt_map_base #* PlanarTransform.basic(0.0, 0.0, dtheta)
                 # print("AFTER:", self.pt_map_base, "\n---")
 
                 self.T_map_base = self.pt_map_base.toTransform()
@@ -292,6 +328,7 @@ class Localize:
 
     def bound(self, magnitude, val):
         assert(magnitude >= 0)
+        return val
         if val < 0:
             return max(-1.0 * magnitude, val)
         return min(magnitude, val)
@@ -325,16 +362,23 @@ class Localize:
         px = p[0, :]
         py = p[1, :]
 
+        # rx = np.swapaxes(rx)
+        # ry = np.swapaxes(ry)
+        # px = np.swapaxes(px)
+        # py = np.swapaxes(py)
+
+        assert(len(rx) == len(px))
+
         N = float(len(rx))
 
-        Rx = 1.0 / N * np.sum(rx)
-        Ry = 1.0 / N * np.sum(ry)
+        Rx = np.mean(rx)
+        Ry = np.mean(ry)
 
-        Px = 1.0 / N * np.sum(px)
-        Py = 1.0 / N * np.sum(py)
+        Px = np.mean(px)
+        Py = np.mean(py)
 
-        RR = 1.0 / N * np.sum(rx**2 + ry**2)
-        RP = 1.0 / N * np.sum(rx * py - ry * px)
+        RR = np.mean(rx**2 + ry**2)
+        RP = np.mean(rx * py - ry * px)
 
         self.d_theta = (RP - (Rx * Py - Ry * Px)) / (RR - (Rx**2 + Ry**2))
         self.d_x = Px - Rx + Ry * self.d_theta
