@@ -21,8 +21,8 @@ from random import randint
 sys.path.insert(0, '/home/kpochana/robotws/src/me169/scripts/util')
 from prmtools import *
 
-VEL_MAX = 0.2
-OMEGA_MAX = 6
+VEL_MAX = 0.4
+OMEGA_MAX = 12
 LAMBDA = 1.0
 TOLERANCE = 0.05
 GAMMA = 0.5
@@ -37,7 +37,7 @@ GRID_X = -3.8100
 GRID_Y = -3.8100
 GRID_THETA = 0.0
 
-NPOINTS = 400
+NPOINTS = 500
 
 
 
