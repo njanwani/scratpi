@@ -111,7 +111,7 @@ def callback_timer(event):
     # print(theta)
     # print("vx", vx)
     # print("wz", wz)
-    print("Encoder: ", float(theta_enc), "IMU: ", float(theta_imu))
+    # print("Encoder: ", float(theta_enc), "IMU: ", float(theta_imu))
     # print(J)
     # print(kin)
 
@@ -128,11 +128,21 @@ def callback_timer(event):
 
     lastpos = [L_pos, R_pos]
 
-
-    # Send wheel commands.
-    driver.left(L_PWM)
-    driver.right(R_PWM)
-    #print("left position = ", L_pos, "\tleft velocity = ", L_vel)
+    try:
+        # Send wheel commands.
+        driver.left(L_PWM)
+        driver.right(R_PWM)
+        #print("left position = ", L_pos, "\tleft velocity = ", L_vel)
+    except Exception as e:
+        print(e)
+        print('Could not send wheel PWM...')
+        print('\tL_PWM =', L_PWM)
+        print('\tR_PWM =', R_PWM)
+        print('\tl_error =', l_error)
+        print('\tr_error =', r_error)
+        print('\tL_vel_des =', L_vel_des)
+        print('\tR_vel_des =', R_vel_des)
+        print('\tT_CORR =', T_CORR)
 
     # Publish the actual wheel state
     msg = JointState()

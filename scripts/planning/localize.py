@@ -20,14 +20,17 @@ from PlanarTransform import *
 
 from sensor_msgs.msg import JointState, LaserScan
 from nav_msgs.msg      import Odometry, OccupancyGrid
+from visualization_msgs.msg import Marker
 from geometry_msgs.msg import PoseArray, PoseStamped, Point, Quaternion, Twist, Pose, TransformStamped, PoseWithCovarianceStamped
 
 
 WALLTHRESHOLD = 0.1
 FRACTIONAL_SCALE = 1.0 / 10.0
+FRACTIONAL_SCALE_MOVING = 1.0 / 100.0
 MAX_CART_SCALE = 0.03
 MAX_THETA_SCALE = np.pi / 20.0
 THROTTLE = 0.00075
+MAX_DIST = 0.2
 GRID_X = -3.8100
 GRID_Y = -3.8100
 GRID_THETA = 0.0
@@ -84,6 +87,8 @@ class Localize:
         # np.savetxt('/home/kpochana/robotws/src/me169/data/wallptmap.csv', w_array, delimiter=',')
         # print('Done! :)')
 
+        self.obstacles = []
+
         print("Reading file...")
         w_array = np.genfromtxt('/home/kpochana/robotws/src/me169/data/wallptmap.csv', delimiter=',')
 
@@ -93,7 +98,9 @@ class Localize:
         self.pose_desired_pub = rospy.Publisher("/pose_desired", PoseStamped, queue_size=10)
         rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.cb_initial_pose)
         rospy.Subscriber("/scan", LaserScan, self.cb_laser, queue_size=1)
+        rospy.Subscriber("/vel_cmd", Twist, self.cb_vel, queue_size=10)
         self.array_pub = rospy.Publisher("/posearray", PoseArray)
+        self.obstacles_pub = rospy.Publisher("/obstacles", Marker)
 
 
         i = 0
@@ -124,7 +131,10 @@ class Localize:
         self.d_x = 0.0
         self.d_y = 0.0
         self.pt_map_laser = None
-        self.contlocal = True
+
+        # Values of whether bot is moving
+        self.v_x = 0.0
+        self.w_z = 0.0
 
         print("Done initializing localization.")
 
@@ -135,6 +145,14 @@ class Localize:
         self.map = np.array(self.mapmsg.data).reshape(self.h, self.w)
         self.resolution = self.mapmsg.info.resolution
 
+    def cb_vel(self, msg):
+        # Basically checking if bot is moving
+
+        self.v_x = msg.linear.x
+        self.w_z = msg.angular.z
+
+        
+
     def cb_initial_pose(self, msg):
         print("Got initial pose")
         # 4.4
@@ -143,6 +161,7 @@ class Localize:
 
         # back-calculate? the transform for the odom in map frame (or is it reversed...)
         self.pt_map_odom = PlanarTransform.fromPose(pose) * self.pt_odom_base.inv()
+        self.contlocal = True
 
     def cb_odom(self, msg):
         # print("Got odometry.")
@@ -206,7 +225,7 @@ class Localize:
                 p = np.zeros((2, 0))
                 ranges = msg.ranges
                 angles = np.arange(msg.angle_min, msg.angle_max + msg.angle_increment, msg.angle_increment)
-
+                print(msg.range_max)
                 for i, range in enumerate(ranges):
                     if range > msg.range_min and range < (msg.range_max):
                         y = range * np.sin(angles[i])
@@ -215,12 +234,18 @@ class Localize:
                         r_x, r_y = pt_r.x(), pt_r.y()
                         u = int((r_x - GRID_X) / self.resolution)
                         v = int((r_y - GRID_Y) / self.resolution)
+                        # print('here')
                         try:
                             p_uv = self.nearestwallpt(u, v)
                             p_x = (float(p_uv[0])+0.5) * self.resolution + GRID_X
                             p_y = (float(p_uv[1])+0.5) * self.resolution + GRID_Y
-                            p = np.hstack([p, np.array([[p_x], [p_y]])])
-                            r = np.hstack([r, np.array([[r_x], [r_y]])])
+                            distance = self.dist(r_x, r_y, p_x, p_y)
+                            # print('dist =',distance)
+                            if (distance < MAX_DIST):
+                                p = np.hstack([p, np.array([[p_x], [p_y]])])
+                                r = np.hstack([r, np.array([[r_x], [r_y]])])
+                            else:
+                                self.obstacles.append(Point(r_x, r_y, 0.0))
                         except:
                             continue
                 
@@ -245,10 +270,18 @@ class Localize:
                 poses_msg.poses = poses
 
                 self.array_pub.publish(poses_msg)
-                self.minimize_least_squares(r, p)
+                consideredpts = len(r[0, :])
+                # Logic for how to handle the scale of localization
+                if consideredpts > 10:
+                    self.minimize_least_squares(r, p)
+                    if (math.isclose(self.v_x, 0.0) and math.isclose(self.w_z, 0.0)):
+                        delta = FRACTIONAL_SCALE * (consideredpts / len(ranges)) * PlanarTransform.basic(self.d_x, self.d_y, self.d_theta)
+                    else:
+                        delta = FRACTIONAL_SCALE_MOVING * (consideredpts / len(ranges)) * PlanarTransform.basic(self.d_x, self.d_y, self.d_theta)
+                    self.pt_map_odom = delta * self.pt_map_odom
 
                 # # get the map to base frame from initial pose
-                delta = FRACTIONAL_SCALE * PlanarTransform.basic(self.d_x, self.d_y, self.d_theta)
+                
                 # dx = self.bound(MAX_CART_SCALE, self.d_x * FRACTIONAL_SCALE)
                 # dy = self.bound(MAX_CART_SCALE, self.d_y * FRACTIONAL_SCALE)
                 # dtheta = self.bound(MAX_THETA_SCALE, self.d_theta * FRACTIONAL_SCALE_THETA)
@@ -258,7 +291,7 @@ class Localize:
                 #     dy = 0.0
                 #     dtheta = 0.0
 
-                print(delta)
+                # print(delta)
                 # # print("BEFORE:", self.pt_map_base)
                 # # Publish the transformed position
                 # desired_dir_msg =                   PoseStamped()
@@ -280,7 +313,10 @@ class Localize:
                 # print("AFTER:", self.pt_map_base, "\n---")
 
                 # back-calculate? the transform for the odom in map frame (or is it reversed...)
-                self.pt_map_odom = delta * self.pt_map_odom
+                
+                if (self.contlocal and math.isclose(self.w_z, 0.0)):
+                    self.publish_obstacles()
+
 
             t = TransformStamped()
 
@@ -290,11 +326,42 @@ class Localize:
             t.child_frame_id = 'odom'
 
             self.tfbroadcast.sendTransform(t)
+
             # print("Sending transform to tf2.")
+
+    def publish_obstacles(self):
+        self.markermsg = Marker()
+        self.markermsg.header.frame_id = "map"
+        self.markermsg.header.stamp = rospy.Time.now()
+        self.markermsg.ns = "waypoints"
+        self.markermsg.id = 0
+        self.markermsg.type = Marker.POINTS
+        self.markermsg.action = Marker.ADD
+        self.markermsg.pose.position.x = 0.0
+        self.markermsg.pose.position.y = 0.0
+        self.markermsg.pose.position.z = 0.0
+        self.markermsg.pose.orientation.x = 0.0
+        self.markermsg.pose.orientation.y = 0.0
+        self.markermsg.pose.orientation.z = 0.0
+        self.markermsg.pose.orientation.w = 1.0
+        self.markermsg.scale.x = 0.03
+        self.markermsg.scale.y = 0.03
+        self.markermsg.scale.z = 0.03
+        self.markermsg.color.a = 1.0
+        self.markermsg.color.r = 0.0
+        self.markermsg.color.g = 0.0
+        self.markermsg.color.b = 0.0
+        self.markermsg.type = 7
+        self.markermsg.points = self.obstacles
+
+        self.obstacles_pub.publish(self.markermsg)
 
     def get_theta(self, q):
         x = 2.0 * np.arctan2(q.z, q.w)
         return x
+
+    def dist(self, x1, y1, x2, y2):
+        return ((x2 - x1)**2 + (y2 - y1)**2)**0.5
 
     def bound(self, magnitude, val):
         assert(magnitude >= 0)

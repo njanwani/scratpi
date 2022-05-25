@@ -117,7 +117,7 @@ class SimplePlanner:
 
         print(self.markermsg.points)
 
-        self.waypoints_pub.publish(self.markermsg)
+        # self.waypoints_pub.publish(self.markermsg)
         self.generated = True
 
 
