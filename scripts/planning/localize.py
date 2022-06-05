@@ -22,14 +22,17 @@ from sensor_msgs.msg import JointState, LaserScan
 from nav_msgs.msg      import Odometry, OccupancyGrid
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import PoseArray, PoseStamped, Point, Quaternion, Twist, Pose, TransformStamped, PoseWithCovarianceStamped
+from std_msgs.msg import Bool
 
 
 WALLTHRESHOLD = 0.1
 FRACTIONAL_SCALE = 1.0 / 10.0
-FRACTIONAL_SCALE_MOVING = 1.0 / 100.0
+FRACTIONAL_SCALE_MOVING = 1.0 / 20.0
+FRACTIONAL_SCALE_TURNING = 1.0 / 100.0
 MAX_CART_SCALE = 0.03
 MAX_THETA_SCALE = np.pi / 20.0
-THROTTLE = 0.00075
+THROTTLE = 0.05
+OBSTACLE_CUTOFF = 1.0
 MAX_DIST = 0.2
 GRID_X = -3.8100
 GRID_Y = -3.8100
@@ -101,6 +104,7 @@ class Localize:
         rospy.Subscriber("/vel_cmd", Twist, self.cb_vel, queue_size=10)
         self.array_pub = rospy.Publisher("/posearray", PoseArray)
         self.obstacles_pub = rospy.Publisher("/obstacles", Marker)
+        self.localizing = rospy.Publisher("/localizing", Bool)
 
 
         i = 0
@@ -135,6 +139,7 @@ class Localize:
         # Values of whether bot is moving
         self.v_x = 0.0
         self.w_z = 0.0
+        self.is_localizing = True
 
         print("Done initializing localization.")
 
@@ -144,6 +149,7 @@ class Localize:
         self.mapmsg = rospy.wait_for_message('/map', OccupancyGrid, 30.0)
         self.map = np.array(self.mapmsg.data).reshape(self.h, self.w)
         self.resolution = self.mapmsg.info.resolution
+
 
     def cb_vel(self, msg):
         # Basically checking if bot is moving
@@ -221,13 +227,17 @@ class Localize:
 
             if (self.contlocal):
                 # print("localizing...")
+                self.is_localizing = False
+
                 r = np.zeros((2, 0))
                 p = np.zeros((2, 0))
                 ranges = msg.ranges
                 angles = np.arange(msg.angle_min, msg.angle_max + msg.angle_increment, msg.angle_increment)
-                print(msg.range_max)
+                new_obstacles = []
+                pts_ctr = 0
                 for i, range in enumerate(ranges):
                     if range > msg.range_min and range < (msg.range_max):
+                        pts_ctr += 1
                         y = range * np.sin(angles[i])
                         x = range * np.cos(angles[i])
                         pt_r = self.pt_map_laser * PlanarTransform(x, y, 0.0, 1.0)
@@ -241,11 +251,12 @@ class Localize:
                             p_y = (float(p_uv[1])+0.5) * self.resolution + GRID_Y
                             distance = self.dist(r_x, r_y, p_x, p_y)
                             # print('dist =',distance)
+                            point = (round(r_x, 1), round(r_y, 1))
                             if (distance < MAX_DIST):
                                 p = np.hstack([p, np.array([[p_x], [p_y]])])
                                 r = np.hstack([r, np.array([[r_x], [r_y]])])
-                            else:
-                                self.obstacles.append(Point(r_x, r_y, 0.0))
+                            elif (range < OBSTACLE_CUTOFF and not (point in self.obstacles) and not (point in new_obstacles)):
+                                new_obstacles = new_obstacles + [point]
                         except:
                             continue
                 
@@ -272,49 +283,24 @@ class Localize:
                 self.array_pub.publish(poses_msg)
                 consideredpts = len(r[0, :])
                 # Logic for how to handle the scale of localization
-                if consideredpts > 10:
+                if consideredpts > 50:
                     self.minimize_least_squares(r, p)
                     if (math.isclose(self.v_x, 0.0) and math.isclose(self.w_z, 0.0)):
-                        delta = FRACTIONAL_SCALE * (consideredpts / len(ranges)) * PlanarTransform.basic(self.d_x, self.d_y, self.d_theta)
+                        delta = FRACTIONAL_SCALE * (consideredpts / pts_ctr) * PlanarTransform.basic(self.d_x, self.d_y, self.d_theta)
                     else:
-                        delta = FRACTIONAL_SCALE_MOVING * (consideredpts / len(ranges)) * PlanarTransform.basic(self.d_x, self.d_y, self.d_theta)
+                        delta = FRACTIONAL_SCALE_MOVING * (consideredpts / pts_ctr) * PlanarTransform.basic(self.d_x, self.d_y, self.d_theta)
                     self.pt_map_odom = delta * self.pt_map_odom
+                    if  (np.linalg.norm(np.array([self.d_x, self.d_y, self.d_theta])) > THROTTLE):
+                        self.is_localizing = True
 
-                # # get the map to base frame from initial pose
                 
-                # dx = self.bound(MAX_CART_SCALE, self.d_x * FRACTIONAL_SCALE)
-                # dy = self.bound(MAX_CART_SCALE, self.d_y * FRACTIONAL_SCALE)
-                # dtheta = self.bound(MAX_THETA_SCALE, self.d_theta * FRACTIONAL_SCALE_THETA)
-
-                # if (np.linalg.norm(np.array([dx, dy, dtheta])) < THROTTLE):
-                #     dx = 0.0
-                #     dy = 0.0
-                #     dtheta = 0.0
-
-                # print(delta)
-                # # print("BEFORE:", self.pt_map_base)
-                # # Publish the transformed position
-                # desired_dir_msg =                   PoseStamped()
-                # # msg.header =            header
-                # desired_dir_msg.header.stamp =      rospy.Time.now()
-                # desired_dir_msg.header.frame_id =   "map"
-                # desired_dir_msg.pose.position =      Point(self.pt_map_base.x(),
-                #                                            self.pt_map_base.y(),
-                #                                            0.0)
-                
-                # desired_theta = np.arctan2(dy, dx)
-                # desired_dir_msg.pose.orientation =   Quaternion(0.0,
-                #                                                 0.0,
-                #                                                 np.sin(desired_theta / 2.0), 
-                #                                                 np.cos(desired_theta / 2.0))
-                # self.pose_desired_pub.publish(desired_dir_msg)
-
-                # self.pt_map_base = PlanarTransform.basic(dx, dy, dtheta) * self.pt_map_base #* PlanarTransform.basic(0.0, 0.0, dtheta)
-                # print("AFTER:", self.pt_map_base, "\n---")
-
-                # back-calculate? the transform for the odom in map frame (or is it reversed...)
-                
-                if (self.contlocal and math.isclose(self.w_z, 0.0)):
+                if (self.contlocal and not self.is_localizing):
+                    # self.obstacles = new_obstacles
+                    # print('Old', self.obstacles.shape)
+                    # print('New', new_obstacles.shape)
+                    self.obstacles = self.obstacles + new_obstacles
+                    # print('here')
+                    # print('Obstacles example: ', self.obstacles[0])
                     self.publish_obstacles()
 
 
@@ -326,6 +312,11 @@ class Localize:
             t.child_frame_id = 'odom'
 
             self.tfbroadcast.sendTransform(t)
+
+            b = Bool()
+            b.data = self.is_localizing
+
+            self.localizing.publish(b)
 
             # print("Sending transform to tf2.")
 
@@ -352,7 +343,10 @@ class Localize:
         self.markermsg.color.g = 0.0
         self.markermsg.color.b = 0.0
         self.markermsg.type = 7
-        self.markermsg.points = self.obstacles
+        points = []
+        for item in self.obstacles:
+            points.append(Point(item[0], item[1], 0.0))
+        self.markermsg.points = points
 
         self.obstacles_pub.publish(self.markermsg)
 

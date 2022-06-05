@@ -10,7 +10,13 @@
 #
 import bisect
 import math
+import numpy as np
 
+D = 0.05 # 0.15
+D_WALL = 0.2
+GRID_X = -3.8100
+GRID_Y = -3.8100
+RES = 0.0254
 
 class State:
     def __init__(self, x, y, theta):
@@ -27,9 +33,11 @@ class State:
 #   supports the A* search tree.
 #
 class Node:
-    def __init__(self, state):
+    def __init__(self, state, map):
         # Save the state matching this node.
         self.state = state
+
+        self.map = map
 
         # Edges used for the graph structure (roadmap).
         self.children = []
@@ -50,6 +58,46 @@ class Node:
     # Distance to another node, for A*, using the state distance.
     def Distance(self, other):
         return self.state.Distance(other.state)
+
+    def connectsTo(self, node):
+        # if self or node to wall < D -> false
+        # else if 
+            # create path_length / D points on line self to node using linspace
+            # check each to see if p_i to wall < D
+                # if yes -> false
+            # if none are -> true
+
+        x_A = self.state.x
+        y_A = self.state.y
+
+        x_B = node.state.x
+        y_B = node.state.y
+
+        if not self.connectsToHelper(x_A, y_A) or not self.connectsToHelper(x_B, y_B):
+            return False
+        else:
+            dist = ((x_B - x_A)**2 + (y_B - y_A)**2)**0.5
+            x = np.linspace(x_A, x_B, dist / D)
+            y = np.linspace(y_A, y_B, dist / D)
+            for i in range(len(x)):
+                if not self.connectsToHelper(x[i], y[i]):
+                    return False
+            
+            return True
+
+
+
+    def connectsToHelper(self, x, y):
+        u = int((x - GRID_X) / RES)
+        v = int((y - GRID_Y) / RES)
+
+        p_uv = self.map[v, u]
+
+        p_x = (float(p_uv[0])+0.5) * RES + GRID_X
+        p_y = (float(p_uv[1])+0.5) * RES + GRID_Y
+
+        d = math.sqrt((x - p_x)**2 + (y - p_y)**2)
+        return d > D_WALL
 
 
 #
@@ -85,7 +133,7 @@ def AStar(nodeList, start, goal):
         # Add the children to the on-deck queue (or update)
         for child in nodeList:
             # Skip if already done.
-            if child.done or node == child or child.Distance(node) > 0.3:
+            if child.done or node == child or not child.connectsTo(node): # child.Distance(node) > 0.3:
                 continue
 
             # Compute the cost to reach the child via this new path.

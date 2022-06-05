@@ -57,7 +57,7 @@
     <param name="correction"  value="0.0"/>
     <param name="horzsamples" value="-1"/>   <!-- -1 = imagewidth/2  = 424 -->
     <param name="vertsamples" value="-1"/>   <!-- -1 = imageheight/2 = 240 -->
-    <param name="minimum_contacts" value="5"/>
+    <param name="minimum_contacts" value="5"/> <!-- NUM NOISY POINTS THRESHOLD -->
     <param name="similar_fraction" value="0.03"/>
   </node>
 
