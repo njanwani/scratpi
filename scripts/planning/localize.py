@@ -251,7 +251,7 @@ class Localize:
                             p_y = (float(p_uv[1])+0.5) * self.resolution + GRID_Y
                             distance = self.dist(r_x, r_y, p_x, p_y)
                             # print('dist =',distance)
-                            point = (round(r_x, 1), round(r_y, 1))
+                            point = (round(r_x, 2), round(r_y, 2))
                             if (distance < MAX_DIST):
                                 p = np.hstack([p, np.array([[p_x], [p_y]])])
                                 r = np.hstack([r, np.array([[r_x], [r_y]])])

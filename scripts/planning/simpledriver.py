@@ -23,12 +23,14 @@ sys.path.insert(0, '/home/kpochana/robotws/src/me169/scripts/util')
 from prmtools import *
 
 VEL_MAX = 0.2
-OMEGA_MAX = 2
-LAMBDA = 1.0 / 3.0
+OMEGA_MAX = 1.5
+OMEGA_MIN = 0.2
+LAMBDA = 1.0
 TOLERANCE = 0.05
 GAMMA = 0.5
 ANGLE_MAX = 0.7743043303489685
 ANGLE_MIN = -0.760712206363678
+ANGLE_STOP = 0.25
 ANGLE_INCREMENT = 0.0036203220952302217
 ANGLE_RANGE = 0.4
 RANGE_MAX = 4.0
@@ -38,7 +40,7 @@ GRID_X = -3.8100
 GRID_Y = -3.8100
 GRID_THETA = 0.0
 RES = 0.0254
-DIST_BLUR = 0.2
+DIST_BLUR = 0.1
 
 NPOINTS = 250
 
@@ -83,7 +85,8 @@ class SimplePlanner:
         self.goal = np.zeros(3)
         self.object = False
         self.is_localizing = True
-        self.at_goal = True
+        # self.at_goal = True
+        self.wheel_control = 0
 
         self.obstacles = []
 
@@ -238,6 +241,7 @@ class SimplePlanner:
     def cb_laser(self, msg):
         ranges = msg.ranges
         self.object = False
+        replan = False
         # curr_angle = ANGLE_MIN
         angles = np.arange(msg.angle_min, msg.angle_max + msg.angle_increment, msg.angle_increment)
         # average = 0.0
@@ -245,16 +249,20 @@ class SimplePlanner:
             curr_angle = angles[i]
             if (curr_angle > -ANGLE_RANGE and curr_angle < ANGLE_RANGE):
                 if (dist <= RANGE_CUTOFF and dist >= RANGE_MIN):
-                    self.object = True
                     # print('Trying with', self.planning, math.isclose(self.wz, 0.0, abs_tol=0.1))
-                    if not self.planning and math.isclose(self.wz, 0.0, abs_tol=0.05):
+
+                    if not replan and not self.planning and math.isclose(self.wz, 0.0, abs_tol=0.05):
                         print('Trying to replan to goal')
                         new_msg = PoseStamped()
                         new_msg.pose.position = self.goal_final.position
                         new_msg.pose.orientation = self.goal_final.orientation
                         new_msg.header.frame_id = 'map'
+                        replan = True
                         self.goalpub.publish(new_msg)
-                    break
+
+                    if (curr_angle > -ANGLE_STOP and curr_angle < ANGLE_STOP):
+                        self.object = True
+                        
                     # print("dist: ", dist)
                     # print("angle: ", curr_angle)
                     
@@ -314,6 +322,12 @@ class SimplePlanner:
         self.line_pub.publish(self.linemsg)
         self.planning = False
 
+    # def tsp(self, destinations):
+    #     plans = 
+    #     for dest in destinations:
+
+
+
     def cb_goal(self, msg):
         assert(msg.header.frame_id == 'map')
         p = msg.pose.position
@@ -356,13 +370,13 @@ class SimplePlanner:
                     self.goal = np.array([self.path[0].state.x, 
                                         self.path[0].state.y, 
                                         np.arctan2(self.path[1].state.y - self.path[0].state.y, self.path[1].state.x - self.path[0].state.x)])
-                    self.at_goal = False
+                    self.wheel_control = 0
                 elif len(self.path) == 1:
                     #doi
                     self.goal = np.array([self.path[0].state.x, 
                                         self.path[0].state.y, 
                                         self.path[0].state.theta])
-                    self.at_goal = False
+                    self.wheel_control = 0
                     self.path = self.path[1:]
                     print("A* Complete: Heading to final goal")
 
@@ -385,12 +399,22 @@ class SimplePlanner:
             v_x = 0.0
             w_z = 0.0
             # print(self.at_goal)
-            if (dist >= 0.05 and not np.array_equal(self.goal, self.pos) and not self.at_goal):
+            if (not np.array_equal(self.goal, self.pos) and \
+                self.wheel_control == 0):
+                angle = self.choose_dir(dir_theta, self.pos[2])
+                w_z = -LAMBDA * angle
+                if math.isclose(angle, 0.0, abs_tol=0.1):
+                    self.wheel_control = 1
+            if (not np.array_equal(self.goal, self.pos) and \
+                  self.wheel_control == 1):
                 angle = self.choose_dir(dir_theta, self.pos[2])
                 w_z = -LAMBDA * angle
                 v_x = min(VEL_MAX, GAMMA * dist) * np.cos(angle)
                 # print("STEP ONE: ", dist, "\t", angle)
-            elif (not self.at_goal):
+                if dist < 0.05:
+                    self.wheel_control = 2
+            if (self.wheel_control == 2):
+                v_x = 0.0
                 angle = self.choose_dir(self.goal[2], self.pos[2])
 
                 w_z = -LAMBDA * angle
@@ -399,14 +423,23 @@ class SimplePlanner:
                     if not np.array_equal(self.goal, self.pos):
                         print("REACHED WAYPOINT!")
                     self.goal = self.pos
-                    self.at_goal = True
+                    self.wheel_control = 3
                 # print("STEP TWO: ", dist, "\t", angle)
             
             if (abs(w_z) > OMEGA_MAX):
                 if w_z < 0:
-                    w_z = -1 * OMEGA_MAX
+                    w_z = -1.0 * OMEGA_MAX
                 else:
                     w_z = OMEGA_MAX
+            
+            if (math.isclose(w_z, 0.0, abs_tol=0.05)):
+                w_z = 0.0
+            elif (abs(w_z) < OMEGA_MIN):
+                if w_z < 0:
+                    w_z = -1.0 * OMEGA_MIN
+                else:
+                    w_z = OMEGA_MIN
+            
             
             # This should save the goal and continue to move there if the object is out of the way
             # Needs testing
