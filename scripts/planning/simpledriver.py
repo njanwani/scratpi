@@ -4,11 +4,7 @@
 #
 #
 
-import math
-import sys
-import time
-import rospy
-import smbus
+import math, sys, time, rospy, smbus
 import numpy as np
 
 from sensor_msgs.msg import JointState, LaserScan
@@ -22,25 +18,31 @@ from random import randint
 sys.path.insert(0, '/home/kpochana/robotws/src/me169/scripts/util')
 from prmtools import *
 
-VEL_MAX = 0.2
+VEL_MAX = 0.1
 OMEGA_MAX = 1.5
 OMEGA_MIN = 0.2
 LAMBDA = 1.0
+LAMBDA_DRIVING = 0.5
 TOLERANCE = 0.05
 GAMMA = 0.5
 ANGLE_MAX = 0.7743043303489685
 ANGLE_MIN = -0.760712206363678
-ANGLE_STOP = 0.25
+ANGLE_STOP = 0.2
 ANGLE_INCREMENT = 0.0036203220952302217
-ANGLE_RANGE = 0.4
+ANGLE_RANGE = 0.5
 RANGE_MAX = 4.0
-RANGE_MIN = 0.05
+RANGE_MIN = 0.08
 RANGE_CUTOFF = 0.4
 GRID_X = -3.8100
 GRID_Y = -3.8100
 GRID_THETA = 0.0
 RES = 0.0254
-DIST_BLUR = 0.1
+DIST_BLUR = 0.08
+OBSTACLE_THRESH = 1
+LASER_THRESH = 10
+D_OBJECT = 0.2
+BOT_WIDTH = 0.17
+
 
 NPOINTS = 250
 
@@ -54,6 +56,8 @@ TSP_POINTS = np.array([[0.124, 2.70, 0.0],
 class SimplePlanner:
 
     def __init__(self): 
+        self.obstacle_dic = {}
+        self.laser_dic = {}
         self.vx = 0.0
         self.wz = 0.0
         self.planning = False
@@ -64,20 +68,17 @@ class SimplePlanner:
         self.points = []
         self.generated = False
         self.prmstates = []
+        self.wheel_control = 3
         rospy.Subscriber("/pose", PoseStamped, self.cb_pose)
         rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.cb_goal)
         rospy.Subscriber("/scan", LaserScan, self.cb_laser)   
         rospy.Subscriber("/localizing", Bool, self.cb_localizing) 
         rospy.Subscriber("/obstacles", Marker, self.cb_obstacle)      
-        rospy.Subscriber("/wheel_state", JointState, self.cb_wheelact)
         self.waypoints_pub = rospy.Publisher("/waypoints", Marker, queue_size = NPOINTS)
         self.line_pub = rospy.Publisher("/line", Marker)
-        # rospy.Subscriber("/wheel_state", JointState, self.grab_theta)
         self.pub = rospy.Publisher('/vel_cmd', Twist, queue_size=10)
         self.goalpub = rospy.Publisher('/move_base_simple/goal', PoseStamped, queue_size=10)
         self.wallpts_pub = rospy.Publisher("/wallpts", Marker)
-        self.rw = 0.0
-        self.lw = 0.0
         self.generate_PRM(NPOINTS)
         self.atgoal = True
         self.direction = ''
@@ -85,11 +86,7 @@ class SimplePlanner:
         self.goal = np.zeros(3)
         self.object = False
         self.is_localizing = True
-        # self.at_goal = True
-        self.wheel_control = 0
-
         self.obstacles = []
-
         self.wallptmap = np.zeros((300, 300, 2))
         w_array = []
         print("Reading file...")
@@ -100,103 +97,10 @@ class SimplePlanner:
                 self.wallptmap[v, u][0] = w_array[i]
                 self.wallptmap[v, u][1] = w_array[i + 1]
                 i += 2
-
         print('Made array with dimensions', np.shape(self.wallptmap), '...')
         print('Done :)')
-    
-    def cb_wheelact(self, msg):
-        self.lw = msg.velocity[0]
-        self.rw = msg.velocity[1]
-        # self.publish_wallpts()
 
-    def get_map(self):
-        # Wait 30sec for a map.
-        rospy.loginfo("Waiting for a map...")
-        self.h = 300
-        self.w = 300
-        self.mapmsg = rospy.wait_for_message('/map', OccupancyGrid, 30.0)
-        self.map = np.array(self.mapmsg.data).reshape(self.h, self.w)
-        self.resolution = self.mapmsg.info.resolution
-
-    def generate_PRM(self, npoints):
-        count = 0
-
-        self.markermsg.header.frame_id = "map"
-        self.markermsg.header.stamp = rospy.Time.now()
-        self.markermsg.ns = "waypoints"
-        self.markermsg.id = 0
-        self.markermsg.type = Marker.POINTS
-        self.markermsg.action = Marker.ADD
-        self.markermsg.pose.position.x = 0.0
-        self.markermsg.pose.position.y = 0.0
-        self.markermsg.pose.position.z = 0.0
-        self.markermsg.pose.orientation.x = 0.0
-        self.markermsg.pose.orientation.y = 0.0
-        self.markermsg.pose.orientation.z = 0.0
-        self.markermsg.pose.orientation.w = 1.0
-        self.markermsg.scale.x = 0.05
-        self.markermsg.scale.y = 0.05
-        self.markermsg.scale.z = 0.05
-        self.markermsg.color.a = 1.0
-        self.markermsg.color.r = 0.0
-        self.markermsg.color.g = 1.0
-        self.markermsg.color.b = 0.0
-        self.markermsg.type = 7
-        self.markermsg.points = []
-
-        self.prmstates.append(State(0.0, 0.0, 0.0))
-
-        while count < npoints:
-            u = randint(0, self.w - 1)
-            v = randint(0, self.h - 1)
-
-            if self.map[v, u] == 0:
-                count += 1
-                self.points.append([u, v])
-                x = float(u + 0.5) * self.resolution + GRID_X
-                y = float(v + 0.5) * self.resolution + GRID_Y
-                self.markermsg.points.append(Point(x, y, 0.0))
-                self.prmstates.append(State(x, y, 0.0)) # x y theta
-
-        # print(self.markermsg.points)
-
-        # self.waypoints_pub.publish(self.markermsg)
-        self.generated = True
-
-    def publish_wallpts(self):
-        msg = Marker()
-        msg.header.frame_id = "map"
-        msg.header.stamp = rospy.Time.now()
-        msg.ns = "waypoints"
-        msg.id = 0
-        msg.type = Marker.POINTS
-        msg.action = Marker.ADD
-        msg.pose.position.x = 0.0
-        msg.pose.position.y = 0.0
-        msg.pose.position.z = 0.0
-        msg.pose.orientation.x = 0.0
-        msg.pose.orientation.y = 0.0
-        msg.pose.orientation.z = 0.0
-        msg.pose.orientation.w = 1.0
-        msg.scale.x = 0.03
-        msg.scale.y = 0.03
-        msg.scale.z = 0.03
-        msg.color.a = 1.0
-        msg.color.r = 0.0
-        msg.color.g = 0.0
-        msg.color.b = 1.0
-        msg.type = 7
-        points = []
-        for v in range(len(self.wallptmap)):
-            for u in range(len(self.wallptmap[v,:])):
-                points.append(Point(float(self.wallptmap[v,u][0] + 0.5) * RES + GRID_X,
-                                    float(self.wallptmap[v,u][1] + 0.5) * RES + GRID_Y,
-                                    0.0))
-        # for point in self.obstacles:
-        #     points = points + [Point(point[0], point[1], 0.0)]
-        msg.points = points
-
-        self.wallpts_pub.publish(msg)
+    # CALLBACKS AND HELPERS ----------------------------------------------------
 
     def update_map(self, point):
         x = point[0]
@@ -206,35 +110,27 @@ class SimplePlanner:
         self.wallptmap[v, u] = (u, v)
         u_range = np.arange(u - int(DIST_BLUR / RES), u + int(DIST_BLUR / RES), 1)
         v_range = np.arange(v - int(DIST_BLUR / RES), v + int(DIST_BLUR / RES), 1)
-        # print('----------')
-        # print('u',u_range)
-        # print('v',v_range)
-        # print('----------')
         for u_curr in u_range:
             for v_curr in v_range:
                 nearest_pt = self.wallptmap[v_curr, u_curr]
                 dist = np.linalg.norm(np.array([u_curr - nearest_pt[0], v_curr - nearest_pt[1]]))
                 new_dist = np.linalg.norm(np.array([u_curr - u, v_curr - v]))
                 if new_dist < dist:
-                    # print('editing wallptmap...')
                     self.wallptmap[v_curr, u_curr] = (u, v)
     
     def cb_obstacle(self, msg):
         points = msg.points
-        # print(points)
-        # for v in range(len(self.wallptmap)):
-        #     for u in range(len(self.wallptmap[v,:])):
-        #         self.wallptmap[v,u] = (u,v)
-        # print('len points', len(points))
         for pt in points:
             point = (pt.x, pt.y)
             if not (point in self.obstacles):
-                self.obstacles = self.obstacles + [point]
-                self.update_map(point)
-        # print('len obstacles', len(self.obstacles))
+                if point not in self.obstacle_dic:
+                    self.obstacle_dic[point] = 1
+                else:
+                    self.obstacle_dic[point] += 1
+                if self.obstacle_dic[point] >= OBSTACLE_THRESH:
+                    self.obstacles = self.obstacles + [point]
+                    self.update_map(point)
         
-        
- 
     def cb_localizing(self, msg):
         self.is_localizing = msg.data
 
@@ -242,16 +138,29 @@ class SimplePlanner:
         ranges = msg.ranges
         self.object = False
         replan = False
-        # curr_angle = ANGLE_MIN
         angles = np.arange(msg.angle_min, msg.angle_max + msg.angle_increment, msg.angle_increment)
-        # average = 0.0
+        # print('min',msg.angle_min)
+        # print('max',msg.angle_max)
+        theta_to_goal = math.atan2(self.goal[1] - self.pos[1], 
+                                     self.goal[0] - self.pos[0])
         for i, dist in enumerate(ranges):
             curr_angle = angles[i]
-            if (curr_angle > -ANGLE_RANGE and curr_angle < ANGLE_RANGE):
-                if (dist <= RANGE_CUTOFF and dist >= RANGE_MIN):
-                    # print('Trying with', self.planning, math.isclose(self.wz, 0.0, abs_tol=0.1))
+            dist_key = round(dist, 2)
 
-                    if not replan and not self.planning and math.isclose(self.wz, 0.0, abs_tol=0.05):
+            # if (curr_angle, dist_key) not in self.laser_dic:
+            #             self.laser_dic[(curr_angle, dist_key)] = 1
+            # else:
+            #     self.laser_dic[(curr_angle, dist_key)] += 1
+
+            # if self.laser_dic[(curr_angle, dist_key)] <= LASER_THRESH:
+            #     continue
+
+            if (curr_angle > -ANGLE_RANGE and curr_angle < ANGLE_RANGE):
+                if (dist <= RANGE_CUTOFF and dist >= RANGE_MIN): 
+                    if self.goal_final and \
+                       not replan and \
+                       not self.planning and \
+                       math.isclose(theta_to_goal - self.pos[2], 0.0, abs_tol=0.1):
                         print('Trying to replan to goal')
                         new_msg = PoseStamped()
                         new_msg.pose.position = self.goal_final.position
@@ -260,21 +169,15 @@ class SimplePlanner:
                         replan = True
                         self.goalpub.publish(new_msg)
 
-                    if (curr_angle > -ANGLE_STOP and curr_angle < ANGLE_STOP):
-                        self.object = True
-                        
-                    # print("dist: ", dist)
-                    # print("angle: ", curr_angle)
-                    
-            # average += dist
-            # curr_angle += ANGLE_INCREMENT
-        # print(self.object)
-        # average /= len(ranges)
-        # print(average)
-        # print("++++++++++++++++++++++++++++++++")
+                    # if (curr_angle > -ANGLE_STOP and curr_angle < ANGLE_STOP and dist <= 0.3):
+                        # self.object = True
+                x = dist * np.sin(curr_angle)
+                y = dist * np.cos(curr_angle)
 
-    def grab_theta(self, msg):
-        self.pos[2] = msg.position[3]
+                if -0.5 * BOT_WIDTH < x and x < 0.5 * BOT_WIDTH \
+                    and RANGE_MIN < y and y < D_OBJECT:
+                    print('OBJECT!!!')
+                    self.object = True
 
     def plan(self, p, q):
         self.planning = True
@@ -315,18 +218,11 @@ class SimplePlanner:
         self.linemsg.type = Marker.LINE_STRIP
         self.linemsg.points = []
         for node in self.path:
-            #print(Point(node.state.x, node.state.y, 0.0))
             self.linemsg.points.append(Point(node.state.x, node.state.y, 0.0))
 
         self.goal = [self.path[0].state.x, self.path[0].state.y, 0.0]
         self.line_pub.publish(self.linemsg)
         self.planning = False
-
-    # def tsp(self, destinations):
-    #     plans = 
-    #     for dest in destinations:
-
-
 
     def cb_goal(self, msg):
         assert(msg.header.frame_id == 'map')
@@ -338,26 +234,10 @@ class SimplePlanner:
         self.atgoal = False
         print("Goal Received")
         self.plan(p, q)
-        
 
-    def choose_dir(self, theta1, theta2):
-        theta = 0.0
-        if abs(theta2 - theta1) > abs(theta1 - theta2):
-            theta = theta1 - theta2
-        else:
-            theta = theta2 - theta1
-        if theta > np.pi:
-            theta -= 2.0 * np.pi
-        elif theta < -1 * np.pi:
-            theta += 2.0 * np.pi
-        return theta
-
-# \actual_exposure\
     def cb_pose(self, msg):
         if not self.planning:
             assert(msg.header.frame_id == 'map')
-            # p = msg.pose.pose.position
-            # q = msg.pose.pose.orientation
             p = msg.pose.position
             q = msg.pose.orientation
             if self.path != None \
@@ -385,20 +265,10 @@ class SimplePlanner:
 
             dir = self.goal[0:2] - self.pos[0:2] 
             dir_theta = np.arctan2(dir[1], dir[0])
-            # if (self.direction == '' and dir_theta < 0):
-            #     self.direction = 'l'
-            # elif self.direction == '':
-            #     self.direction = 'r'
-
-            # if (self.direction == 'l' and dir_theta > 0):
-            #     dir_theta -= 2 * np.pi
-            # elif (self.direction == 'r' and dir_theta < 0):
-            #     dir_theta += 2 * np.pi
 
             dist = np.linalg.norm(dir)
             v_x = 0.0
             w_z = 0.0
-            # print(self.at_goal)
             if (not np.array_equal(self.goal, self.pos) and \
                 self.wheel_control == 0):
                 angle = self.choose_dir(dir_theta, self.pos[2])
@@ -408,9 +278,8 @@ class SimplePlanner:
             if (not np.array_equal(self.goal, self.pos) and \
                   self.wheel_control == 1):
                 angle = self.choose_dir(dir_theta, self.pos[2])
-                w_z = -LAMBDA * angle
+                w_z = -LAMBDA_DRIVING * angle
                 v_x = min(VEL_MAX, GAMMA * dist) * np.cos(angle)
-                # print("STEP ONE: ", dist, "\t", angle)
                 if dist < 0.05:
                     self.wheel_control = 2
             if (self.wheel_control == 2):
@@ -424,7 +293,6 @@ class SimplePlanner:
                         print("REACHED WAYPOINT!")
                     self.goal = self.pos
                     self.wheel_control = 3
-                # print("STEP TWO: ", dist, "\t", angle)
             
             if (abs(w_z) > OMEGA_MAX):
                 if w_z < 0:
@@ -440,17 +308,10 @@ class SimplePlanner:
                 else:
                     w_z = OMEGA_MIN
             
-            
-            # This should save the goal and continue to move there if the object is out of the way
-            # Needs testing
             if (self.object):
                 # print("OBJECT!!")
-                # print('v_x',v_x)
                 if v_x > 0:
                     v_x = 0.0
-                # v_x, w_z = -0.025, 0.0
-            # elif (self.planning):
-            #     v_x = 0.0
 
             msg = Twist()
             msg.linear.x = v_x
@@ -462,11 +323,6 @@ class SimplePlanner:
             self.vx = v_x
             self.wz = w_z
             self.pub.publish(msg)
-
-            # if (self.object and not self.planning):
-            #     print("Replanning")
-            #     # self.plan(self.goal_final.position, self.goal_final.orientation)
-
             if self.generated:
                 self.waypoints_pub.publish(self.markermsg)
         else:
@@ -481,6 +337,8 @@ class SimplePlanner:
             self.wz = 0.0
             self.pub.publish(msg)
 
+    # HELPER FUNCTIONS ---------------------------------------------------------
+
     def minmax(minimum, maximum, omegaz):
         assert(maximum >= minimum)
         return min(maximum, max(minimum, omegaz))
@@ -488,6 +346,99 @@ class SimplePlanner:
     def get_theta(self, q):
         x = 2.0 * np.arctan2(q.z, q.w)
         return x
+
+    def get_map(self):
+        # Wait 30sec for a map.
+        rospy.loginfo("Waiting for a map...")
+        self.h = 300
+        self.w = 300
+        self.mapmsg = rospy.wait_for_message('/map', OccupancyGrid, 30.0)
+        self.map = np.array(self.mapmsg.data).reshape(self.h, self.w)
+        self.resolution = self.mapmsg.info.resolution
+
+    def generate_PRM(self, npoints):
+        count = 0
+        self.markermsg.header.frame_id = "map"
+        self.markermsg.header.stamp = rospy.Time.now()
+        self.markermsg.ns = "waypoints"
+        self.markermsg.id = 0
+        self.markermsg.type = Marker.POINTS
+        self.markermsg.action = Marker.ADD
+        self.markermsg.pose.position.x = 0.0
+        self.markermsg.pose.position.y = 0.0
+        self.markermsg.pose.position.z = 0.0
+        self.markermsg.pose.orientation.x = 0.0
+        self.markermsg.pose.orientation.y = 0.0
+        self.markermsg.pose.orientation.z = 0.0
+        self.markermsg.pose.orientation.w = 1.0
+        self.markermsg.scale.x = 0.05
+        self.markermsg.scale.y = 0.05
+        self.markermsg.scale.z = 0.05
+        self.markermsg.color.a = 1.0
+        self.markermsg.color.r = 0.0
+        self.markermsg.color.g = 1.0
+        self.markermsg.color.b = 0.0
+        self.markermsg.type = 7
+        self.markermsg.points = []
+        self.prmstates.append(State(0.0, 0.0, 0.0))
+        while count < npoints:
+            u = randint(0, self.w - 1)
+            v = randint(0, self.h - 1)
+            if self.map[v, u] == 0:
+                count += 1
+                self.points.append([u, v])
+                x = float(u + 0.5) * self.resolution + GRID_X
+                y = float(v + 0.5) * self.resolution + GRID_Y
+                self.markermsg.points.append(Point(x, y, 0.0))
+                self.prmstates.append(State(x, y, 0.0)) # x y theta
+        self.generated = True
+
+    def publish_wallpts(self):
+        msg = Marker()
+        msg.header.frame_id = "map"
+        msg.header.stamp = rospy.Time.now()
+        msg.ns = "waypoints"
+        msg.id = 0
+        msg.type = Marker.POINTS
+        msg.action = Marker.ADD
+        msg.pose.position.x = 0.0
+        msg.pose.position.y = 0.0
+        msg.pose.position.z = 0.0
+        msg.pose.orientation.x = 0.0
+        msg.pose.orientation.y = 0.0
+        msg.pose.orientation.z = 0.0
+        msg.pose.orientation.w = 1.0
+        msg.scale.x = 0.03
+        msg.scale.y = 0.03
+        msg.scale.z = 0.03
+        msg.color.a = 1.0
+        msg.color.r = 0.0
+        msg.color.g = 0.0
+        msg.color.b = 1.0
+        msg.type = 7
+        points = []
+        for v in range(len(self.wallptmap)):
+            for u in range(len(self.wallptmap[v,:])):
+                points.append(Point(float(self.wallptmap[v,u][0] + 0.5) * RES + GRID_X,
+                                    float(self.wallptmap[v,u][1] + 0.5) * RES + GRID_Y,
+                                    0.0))
+        msg.points = points
+        self.wallpts_pub.publish(msg)
+    
+    def choose_dir(self, theta1, theta2):
+        theta = 0.0
+        if abs(theta2 - theta1) > abs(theta1 - theta2):
+            theta = theta1 - theta2
+        else:
+            theta = theta2 - theta1
+        if theta > np.pi:
+            theta -= 2.0 * np.pi
+        elif theta < -1 * np.pi:
+            theta += 2.0 * np.pi
+        return theta
+
+    def grab_theta(self, msg):
+        self.pos[2] = msg.position[3]
 
     
 

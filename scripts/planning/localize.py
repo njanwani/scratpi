@@ -37,6 +37,7 @@ MAX_DIST = 0.2
 GRID_X = -3.8100
 GRID_Y = -3.8100
 GRID_THETA = 0.0
+OBSTACLE_THRESH = 10
 
 
 class Localize: 
@@ -46,6 +47,7 @@ class Localize:
         self.counter = 0
         self.localize_rate = 10
         self.initialized = False
+        self.obstacle_dic = {}
         # 4.1
         self.pt_map_odom = PlanarTransform.unity()
 
@@ -236,7 +238,7 @@ class Localize:
                 new_obstacles = []
                 pts_ctr = 0
                 for i, range in enumerate(ranges):
-                    if range > msg.range_min and range < (msg.range_max):
+                    if range > (msg.range_min * 2.0) and range < (msg.range_max):
                         pts_ctr += 1
                         y = range * np.sin(angles[i])
                         x = range * np.cos(angles[i])
@@ -256,7 +258,13 @@ class Localize:
                                 p = np.hstack([p, np.array([[p_x], [p_y]])])
                                 r = np.hstack([r, np.array([[r_x], [r_y]])])
                             elif (range < OBSTACLE_CUTOFF and not (point in self.obstacles) and not (point in new_obstacles)):
-                                new_obstacles = new_obstacles + [point]
+                                if point not in self.obstacle_dic:
+                                    self.obstacle_dic[point] = 1
+                                else:
+                                    self.obstacle_dic[point] += 1
+                                
+                                if self.obstacle_dic[point] > OBSTACLE_THRESH:
+                                    new_obstacles = new_obstacles + [point]
                         except:
                             continue
                 
