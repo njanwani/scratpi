@@ -40,7 +40,7 @@ RES = 0.0254
 DIST_BLUR = 0.25
 OBSTACLE_THRESH = 1
 LASER_THRESH = 10
-D_OBJECT = 0.15
+D_OBJECT = 0.2
 BOT_WIDTH = 0.15
 
 
@@ -153,6 +153,7 @@ class SimplePlanner:
                                 self.wallptmap)
         if not valid_path:
             self.object = True
+            self.hard_stop()
             if not self.planning and self.obstacles_added < 1:
                 self.planning = True
                 print('Trying to replan to goal')
@@ -212,6 +213,7 @@ class SimplePlanner:
                     # xstat.append(x)
                     # print('OBJECT???', rospy.get_time())
                     self.object = True
+                    self.hard_stop()
                     # print("Planning?:", self.planning)
                     # print("Replanning?:", replan) 
                     # print(not self.planning, not replan, math.isclose(theta_to_goal - pos_angle, 0.0, abs_tol=0.1))
@@ -383,7 +385,7 @@ class SimplePlanner:
                 w_z = 0.0
 
             if self.obj_slow:
-                v_x *= 0.5
+                v_x *= 0.25
 
             msg = Twist()
             msg.linear.x = v_x
@@ -398,18 +400,21 @@ class SimplePlanner:
             # if self.generated:
             #     self.waypoints_pub.publish(self.markermsg)
         else:
-            msg = Twist()
-            msg.linear.x = 0.0
-            msg.linear.y = 0.0
-            msg.linear.z = 0.0
-            msg.angular.x = 0.0
-            msg.angular.y = 0.0
-            msg.angular.z = 0.0
-            self.vx = 0.0
-            self.wz = 0.0
-            self.pub.publish(msg)
+            self.hard_stop()
 
     # HELPER FUNCTIONS ---------------------------------------------------------
+
+    def hard_stop(self):
+        msg = Twist()
+        msg.linear.x = 0.0
+        msg.linear.y = 0.0
+        msg.linear.z = 0.0
+        msg.angular.x = 0.0
+        msg.angular.y = 0.0
+        msg.angular.z = 0.0
+        self.vx = 0.0
+        self.wz = 0.0
+        self.pub.publish(msg)
 
     def minmax(minimum, maximum, omegaz):
         assert(maximum >= minimum)

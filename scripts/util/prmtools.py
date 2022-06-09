@@ -13,7 +13,7 @@ import math
 import numpy as np
 
 D = 0.05 # 0.15
-D_WALL = 0.15
+D_WALL = 0.2
 GRID_X = -3.8100
 GRID_Y = -3.8100
 RES = 0.0254
