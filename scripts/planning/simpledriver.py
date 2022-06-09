@@ -40,7 +40,7 @@ RES = 0.0254
 DIST_BLUR = 0.25
 OBSTACLE_THRESH = 1
 LASER_THRESH = 10
-D_OBJECT = 0.3
+D_OBJECT = 0.15
 BOT_WIDTH = 0.15
 
 
@@ -57,6 +57,7 @@ class SimplePlanner:
 
     def __init__(self): 
         self.obstacle_dic = {}
+        self.obstacles_added = 0
         self.badpath = False
         self.laser_dic = {}
         self.vx = 0.0
@@ -87,6 +88,7 @@ class SimplePlanner:
         self.pos = np.zeros(3)
         self.goal = np.zeros(3)
         self.object = False
+        self.obj_slow = True
         self.is_localizing = True
         self.first_goal = True
         self.obstacles = []
@@ -123,6 +125,7 @@ class SimplePlanner:
     
     def cb_obstacle(self, msg):
         points = msg.points
+        added = 0
         for pt in points:
             point = (pt.x, pt.y)
             if not (point in self.obstacles):
@@ -132,23 +135,28 @@ class SimplePlanner:
                     self.obstacle_dic[point] += 1
                 if self.obstacle_dic[point] >= OBSTACLE_THRESH:
                     self.obstacles = self.obstacles + [point]
+                    added += 1
                     self.update_map(point)
+        self.obstacles_added += added
+        self.obstacles_added /= 2.0
         
     def cb_localizing(self, msg):
         self.is_localizing = msg.data
 
     def cb_laser(self, msg):
         self.object = False
+        self.obj_slow = True
         replan = False
         valid_path = verifyPath([Node(State(self.pos[0], self.pos[1], self.pos[2]), self.wallptmap)] \
-                                + [Node(State(self.goal[0], self.goal[1], self.goal[2]), self.wallptmap)]
+                                + [Node(State(self.goal[0], self.goal[1], self.goal[2]), self.wallptmap)] \
                                 + self.path,
                                 self.wallptmap)
         if not valid_path:
             self.object = True
-            if not self.planning:
+            if not self.planning and self.obstacles_added < 1:
                 self.planning = True
                 print('Trying to replan to goal')
+                self.generate_PRM(15, (int((self.pos[0] - GRID_X) / RES), int((self.pos[1] - GRID_Y) / RES)), (20, 20))
                 new_msg = PoseStamped()
                 new_msg.pose.position = self.goal_final.position
                 new_msg.pose.orientation = self.goal_final.orientation
@@ -202,19 +210,19 @@ class SimplePlanner:
                 if -0.5 * BOT_WIDTH < x and x < 0.5 * BOT_WIDTH \
                     and RANGE_MIN < y and y < D_OBJECT:
                     # xstat.append(x)
-                    # print('OBJECT???')
+                    # print('OBJECT???', rospy.get_time())
                     self.object = True
                     # print("Planning?:", self.planning)
                     # print("Replanning?:", replan) 
                     # print(not self.planning, not replan, math.isclose(theta_to_goal - pos_angle, 0.0, abs_tol=0.1))
-                    if not self.planning and not replan and math.isclose(theta_to_goal - pos_angle, 0.0, abs_tol=0.1) and not self.first_goal:
+                    if not self.planning and not replan and math.isclose(theta_to_goal - pos_angle, 0.0, abs_tol=0.1) and not self.first_goal and self.obstacles_added < 1:
                         self.planning = True 
                         print('Sneaky object: trying to replan to goal')
                         print('pos',self.pos)
                         print('goal',self.goal)
                         print('theta to goal', theta_to_goal)
                         print('theta pos', pos_angle)
-                        self.generate_PRM(15, (int((self.pos[0] - GRID_X) / RES), int((self.pos[1] - GRID_Y) / RES)), (50, 50))
+                        self.generate_PRM(30, (int((self.pos[0] - GRID_X) / RES), int((self.pos[1] - GRID_Y) / RES)), (50, 50))
                         new_msg = PoseStamped()
                         new_msg.pose.position = self.goal_final.position
                         new_msg.pose.orientation = self.goal_final.orientation
@@ -223,6 +231,8 @@ class SimplePlanner:
                         self.goalpub.publish(new_msg)
                         # MOVE INTO SPECIAL MODE?????
                     break
+        if not self.object:
+            self.obj_slow = False
         # if len(xstat) > 0:
         #     print('min_x', np.min(xstat))
         #     print('max_x', np.max(xstat))
@@ -234,6 +244,7 @@ class SimplePlanner:
         self.planning = True
         self.prmstates.append(State(p.x, p.y, self.get_theta(q)))
         self.nodes = []
+        # self.publish_wallpts()
         self.nodes.append(Node(State(self.pos[0], self.pos[1], self.get_theta(q)), self.wallptmap))
         for state in self.prmstates:
             self.nodes.append(Node(state, self.wallptmap))
@@ -371,6 +382,9 @@ class SimplePlanner:
             if self.planning:
                 w_z = 0.0
 
+            if self.obj_slow:
+                v_x *= 0.5
+
             msg = Twist()
             msg.linear.x = v_x
             msg.linear.y = 0.0
@@ -442,8 +456,8 @@ class SimplePlanner:
         while count < npoints:
             u = randint(-range[0], range[0] - 1) + center[0]
             v = randint(-range[1], range[1] - 1) + center[1]
+            count += 1
             if self.map[v, u] == 0:
-                count += 1
                 self.points.append([u, v])
                 x = float(u + 0.5) * self.resolution + GRID_X
                 y = float(v + 0.5) * self.resolution + GRID_Y

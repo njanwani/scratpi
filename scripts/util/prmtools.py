@@ -13,7 +13,7 @@ import math
 import numpy as np
 
 D = 0.05 # 0.15
-D_WALL = 0.1
+D_WALL = 0.15
 GRID_X = -3.8100
 GRID_Y = -3.8100
 RES = 0.0254
@@ -77,8 +77,8 @@ class Node:
             return False
         else:
             dist = ((x_B - x_A)**2 + (y_B - y_A)**2)**0.5
-            x = np.linspace(x_A, x_B, dist / D)
-            y = np.linspace(y_A, y_B, dist / D)
+            x = np.linspace(x_A, x_B, num=dist / D)
+            y = np.linspace(y_A, y_B, num=dist / D)
             for i in range(len(x)):
                 if not self.connectsToHelper(x[i], y[i]):
                     return False
