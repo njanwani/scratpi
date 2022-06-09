@@ -13,7 +13,7 @@ import math
 import numpy as np
 
 D = 0.05 # 0.15
-D_WALL = 0.2
+D_WALL = 0.1
 GRID_X = -3.8100
 GRID_Y = -3.8100
 RES = 0.0254
@@ -98,6 +98,18 @@ class Node:
 
         d = math.sqrt((x - p_x)**2 + (y - p_y)**2)
         return d > D_WALL
+
+
+def verifyPath(path, wallptmap):
+    new_path = []
+    for node in path:
+        new_path.append(Node(node.state, wallptmap))
+
+    for i in range(len(new_path) - 1):
+        # print('checking...')
+        if not new_path[i].connectsTo(new_path[i + 1]):
+            return False
+    return True
 
 
 #

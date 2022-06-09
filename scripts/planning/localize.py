@@ -27,8 +27,8 @@ from std_msgs.msg import Bool
 
 WALLTHRESHOLD = 0.1
 FRACTIONAL_SCALE = 1.0 / 10.0
-FRACTIONAL_SCALE_MOVING = 1.0 / 20.0
-FRACTIONAL_SCALE_TURNING = 1.0 / 100.0
+FRACTIONAL_SCALE_MOVING = 0.0 / 20.0
+FRACTIONAL_SCALE_TURNING = 0.0 / 100.0
 MAX_CART_SCALE = 0.03
 MAX_THETA_SCALE = np.pi / 20.0
 THROTTLE = 0.05
@@ -238,7 +238,7 @@ class Localize:
                 new_obstacles = []
                 pts_ctr = 0
                 for i, range in enumerate(ranges):
-                    if range > (msg.range_min * 2.0) and range < (msg.range_max):
+                    if range > (msg.range_min * 2.0) and range < (msg.range_max / 2.0):
                         pts_ctr += 1
                         y = range * np.sin(angles[i])
                         x = range * np.cos(angles[i])
@@ -268,27 +268,27 @@ class Localize:
                         except:
                             continue
                 
-                poses = []
-                density = 5
-                for i, wallpt in enumerate(np.swapaxes(p, 0, 1)):
-                    if i % density != 0:
-                        continue
-                    pose = Pose()
-                    pose.position = Point(r[0][i], r[1][i], 0.0)
-                    try:
-                        theta = np.arctan2((wallpt[1] - r[1][i]), (wallpt[0] - r[0][i]))
-                    except:
-                        print("Catch divide by zero")
-                        continue
-                    pose.orientation = Quaternion(0.0, 0.0, math.sin(theta / 2.0), math.cos(theta / 2.0))
-                    poses.append(pose)
+                # poses = []
+                # density = 5
+                # for i, wallpt in enumerate(np.swapaxes(p, 0, 1)):
+                #     if i % density != 0:
+                #         continue
+                #     pose = Pose()
+                #     pose.position = Point(r[0][i], r[1][i], 0.0)
+                #     try:
+                #         theta = np.arctan2((wallpt[1] - r[1][i]), (wallpt[0] - r[0][i]))
+                #     except:
+                #         print("Catch divide by zero")
+                #         continue
+                #     pose.orientation = Quaternion(0.0, 0.0, math.sin(theta / 2.0), math.cos(theta / 2.0))
+                #     poses.append(pose)
 
-                poses_msg = PoseArray()
-                poses_msg.header.stamp = rospy.Time.now()
-                poses_msg.header.frame_id = 'map'
-                poses_msg.poses = poses
+                # poses_msg = PoseArray()
+                # poses_msg.header.stamp = rospy.Time.now()
+                # poses_msg.header.frame_id = 'map'
+                # poses_msg.poses = poses
 
-                self.array_pub.publish(poses_msg)
+                # self.array_pub.publish(poses_msg)
                 consideredpts = len(r[0, :])
                 # Logic for how to handle the scale of localization
                 if consideredpts > 50:
