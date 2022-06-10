@@ -19,9 +19,9 @@ sys.path.insert(0, '/home/kpochana/robotws/src/me169/scripts/util')
 from prmtools import *
 
 VEL_MAX = 0.1
-OMEGA_MAX = 0.8
+OMEGA_MAX = 0.6
 OMEGA_MIN = 0.1
-LAMBDA = 1.2
+LAMBDA = 1.0
 LAMBDA_DRIVING = 0.50
 TOLERANCE = 0.05
 GAMMA = 0.5
@@ -37,7 +37,7 @@ GRID_X = -3.8100
 GRID_Y = -3.8100
 GRID_THETA = 0.0
 RES = 0.0254
-DIST_BLUR = 0.25
+DIST_BLUR = 0.2
 OBSTACLE_THRESH = 1
 LASER_THRESH = 10
 D_OBJECT = 0.2
@@ -56,6 +56,7 @@ TSP_POINTS = np.array([[0.124, 2.70, 0.0],
 class SimplePlanner:
 
     def __init__(self): 
+        self.valid_path = True
         self.obstacle_dic = {}
         self.obstacles_added = 0
         self.badpath = False
@@ -126,6 +127,8 @@ class SimplePlanner:
     def cb_obstacle(self, msg):
         points = msg.points
         added = 0
+        obs = self.obstacles_added
+        self.obstacles_added = 999
         for pt in points:
             point = (pt.x, pt.y)
             if not (point in self.obstacles):
@@ -137,8 +140,10 @@ class SimplePlanner:
                     self.obstacles = self.obstacles + [point]
                     added += 1
                     self.update_map(point)
+        self.obstacles_added = obs
         self.obstacles_added += added
         self.obstacles_added /= 2.0
+        # print(self.obstacles_added)
         
     def cb_localizing(self, msg):
         self.is_localizing = msg.data
@@ -147,17 +152,20 @@ class SimplePlanner:
         self.object = False
         self.obj_slow = True
         replan = False
-        valid_path = verifyPath([Node(State(self.pos[0], self.pos[1], self.pos[2]), self.wallptmap)] \
-                                + [Node(State(self.goal[0], self.goal[1], self.goal[2]), self.wallptmap)] \
-                                + self.path,
-                                self.wallptmap)
-        if not valid_path:
+        if self.obstacles_added > 1 and self.valid_path:
+            # print('Checking path...', rospy.get_time())
+            self.valid_path, self.loc = verifyPath([Node(State(self.pos[0], self.pos[1], self.pos[2]), self.wallptmap)] \
+                                              + [Node(State(self.goal[0], self.goal[1], self.goal[2]), self.wallptmap)] \
+                                              + self.path,
+                                              self.wallptmap)
+        if not self.valid_path:
+            # print('Bad path detected...', rospy.get_time())
             self.object = True
             self.hard_stop()
             if not self.planning and self.obstacles_added < 1:
                 self.planning = True
                 print('Trying to replan to goal')
-                self.generate_PRM(15, (int((self.pos[0] - GRID_X) / RES), int((self.pos[1] - GRID_Y) / RES)), (20, 20))
+                self.generate_PRM(15, self.loc, (20, 20))
                 new_msg = PoseStamped()
                 new_msg.pose.position = self.goal_final.position
                 new_msg.pose.orientation = self.goal_final.orientation
@@ -217,7 +225,7 @@ class SimplePlanner:
                     # print("Planning?:", self.planning)
                     # print("Replanning?:", replan) 
                     # print(not self.planning, not replan, math.isclose(theta_to_goal - pos_angle, 0.0, abs_tol=0.1))
-                    if not self.planning and not replan and math.isclose(theta_to_goal - pos_angle, 0.0, abs_tol=0.1) and not self.first_goal and self.obstacles_added < 1:
+                    if not self.planning and not replan and math.isclose(theta_to_goal - pos_angle, 0.0, abs_tol=0.1) and not self.first_goal:
                         self.planning = True 
                         print('Sneaky object: trying to replan to goal')
                         print('pos',self.pos)
@@ -289,6 +297,7 @@ class SimplePlanner:
         self.first_goal = True
         self.line_pub.publish(self.linemsg)
         self.planning = False
+        self.valid_path = True
 
     def cb_goal(self, msg):
         assert(msg.header.frame_id == 'map')
@@ -385,7 +394,7 @@ class SimplePlanner:
                 w_z = 0.0
 
             if self.obj_slow:
-                v_x *= 0.25
+                v_x *= 0.75
 
             msg = Twist()
             msg.linear.x = v_x

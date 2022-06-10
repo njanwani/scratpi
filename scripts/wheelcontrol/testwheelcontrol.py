@@ -36,14 +36,14 @@ DT = 0.01
 MAX_DT = 0.25
 K = 200
 LMBDA = 0.9
-T_CORR = 0.3
+T_CORR = 1.0 # 0.3
 K_1 = 1
 PWM_RATIO = 24
 T_CMD = 0.25
-T_VEL = 0.2
+T_VEL = 1.0 # 0.2
 
-VEL_TO_PWM_SLOPE = [11, 13]
-VEL_TO_PWM_OFFSET = [30, 30]
+VEL_TO_PWM_SLOPE = [12, 11]
+VEL_TO_PWM_OFFSET = [40, 30]
 
 WHEEL_RADIUS = 0.0326
 WHEEL_TO_WHEEL = 0.067
@@ -83,15 +83,6 @@ def callback_timer(event):
             L_dist, R_dist, L_vel, R_vel, L_PWM, R_PWM, L_vel_des, R_vel_des, \
             omega_enc, omega_imu, theta_enc, theta_imu
     now = rospy.Time.now()
-    # print("Now: ", type(now), "cmdtime: ", type(cmdtime), "diff: ", type(now - cmdtime))
-    diff = now - cmdtime
-    if (diff.to_sec() >= MAX_DT):
-        cmdvel[0] = 0.0
-        cmdvel[1] = 0.0
-
-    L_dist += DT * cmdvel[0]
-    R_dist += DT * cmdvel[1]
-
     # Process the encoders, convert to wheel angles!
     L_pos = encoder.leftencoder() / (GEAR_RATIO * PPR) * 2 * math.pi
     R_pos = encoder.rightencoder() / (GEAR_RATIO * PPR) * 2 * math.pi
@@ -99,35 +90,9 @@ def callback_timer(event):
     # calculate velocity...
     L_vel += DT / T_VEL * ((L_pos - lastpos[0]) / DT - L_vel)
     R_vel += DT / T_VEL * ((R_pos - lastpos[1]) / DT - R_vel)
-    # print(L_vel, " ", R_vel)
-    # Compute kinematics
-    kin = J @ np.array([[L_vel], [-R_vel]])
-    vx = kin[0, 0]
-    omega_enc = kin[1, 0]
-
-    # READ GYRO
-    (omega_imu, sat) = gyro.read()
-    theta_imu += omega_imu * DT
-    # print(theta)
-    # print("vx", vx)
-    # print("wz", wz)
-    # print("Encoder: ", float(theta_enc), "IMU: ", float(theta_imu))
-    # print(J)
-    # print(kin)
-
-    theta_enc += omega_enc * DT
-
-    L_vel_des += DT / T_CMD * (cmdvel[0] - L_vel_des)
-    R_vel_des += DT / T_CMD * (cmdvel[1] - R_vel_des)
-
-    l_error = L_dist - L_pos
-    r_error = R_dist - R_pos
-    print('l_error', l_error)
-    print('r_error', r_error)
-    L_PWM = v_to_PWM(L_vel_des + 1 / T_CORR * (l_error), 'l')
-    R_PWM = v_to_PWM(R_vel_des + 1 / T_CORR * (r_error), 'r')
-    #print("Left: ", f'{l_error:.3f}', "Right: ", f'{r_error:.3f}')
-
+    print("Left: ", f'{L_vel:.3f}', "Right: ", f'{R_vel:.3f}')
+    L_PWM = 100
+    R_PWM = 153
     lastpos = [L_pos, R_pos]
 
     try:
@@ -147,24 +112,24 @@ def callback_timer(event):
         print('\tT_CORR =', T_CORR)
 
     # Publish the actual wheel state
-    msg = JointState()
-    msg.header.stamp = now
-    msg.name         = ['leftwheel', 'rightwheel', 'theta_encoder', 'theta_IMU']
-    msg.position     = [L_pos, R_pos, theta_enc, theta_imu]
-    msg.velocity     = [L_vel, R_vel, omega_enc, omega_imu]
-    msg.effort       = [0.0, 0.0, 0.0, 0.0]
-    pubact.publish(msg)
-    #print("published actual to ", msg)
-    #print(msg)
+    # msg = JointState()
+    # msg.header.stamp = now
+    # msg.name         = ['leftwheel', 'rightwheel', 'theta_encoder', 'theta_IMU']
+    # msg.position     = [L_pos, R_pos, theta_enc, theta_imu]
+    # msg.velocity     = [L_vel, R_vel, omega_enc, omega_imu]
+    # msg.effort       = [0.0, 0.0, 0.0, 0.0]
+    # pubact.publish(msg)
+    # #print("published actual to ", msg)
+    # #print(msg)
 
-    # Publish the desired wheel state
-    msg = JointState()
-    msg.header.stamp = now
-    msg.name         = ['leftwheel', 'rightwheel']
-    msg.position     = [L_dist, R_dist]
-    msg.velocity     = [L_vel_des, R_vel_des]
-    msg.effort       = [L_PWM, R_PWM]
-    pubdes.publish(msg)
+    # # Publish the desired wheel state
+    # msg = JointState()
+    # msg.header.stamp = now
+    # msg.name         = ['leftwheel', 'rightwheel']
+    # msg.position     = [L_dist, R_dist]
+    # msg.velocity     = [L_vel_des, R_vel_des]
+    # msg.effort       = [L_PWM, R_PWM]
+    # pubdes.publish(msg)
     # print("published desired to ", msg)
 
 

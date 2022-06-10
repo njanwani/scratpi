@@ -27,8 +27,8 @@ from std_msgs.msg import Bool
 
 WALLTHRESHOLD = 0.1
 FRACTIONAL_SCALE = 1.0 / 10.0
-FRACTIONAL_SCALE_MOVING = 0.0 / 20.0
-FRACTIONAL_SCALE_TURNING = 0.0 / 100.0
+FRACTIONAL_SCALE_MOVING = 1.0 / 20.0
+FRACTIONAL_SCALE_TURNING = 1.0 / 100.0
 MAX_CART_SCALE = 0.03
 MAX_THETA_SCALE = np.pi / 20.0
 THROTTLE = 0.05
@@ -253,7 +253,7 @@ class Localize:
                             p_y = (float(p_uv[1])+0.5) * self.resolution + GRID_Y
                             distance = self.dist(r_x, r_y, p_x, p_y)
                             # print('dist =',distance)
-                            point = (round(r_x, 2), round(r_y, 2))
+                            point = (round(r_x, 1), round(r_y, 1))
                             if (distance < MAX_DIST):
                                 p = np.hstack([p, np.array([[p_x], [p_y]])])
                                 r = np.hstack([r, np.array([[r_x], [r_y]])])

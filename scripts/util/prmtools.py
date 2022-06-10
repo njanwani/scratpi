@@ -13,7 +13,7 @@ import math
 import numpy as np
 
 D = 0.05 # 0.15
-D_WALL = 0.2
+D_WALL = 0.08
 GRID_X = -3.8100
 GRID_Y = -3.8100
 RES = 0.0254
@@ -60,30 +60,29 @@ class Node:
         return self.state.Distance(other.state)
 
     def connectsTo(self, node):
-        # if self or node to wall < D -> false
-        # else if 
-            # create path_length / D points on line self to node using linspace
-            # check each to see if p_i to wall < D
-                # if yes -> false
-            # if none are -> true
+        return self.connectsToUV(node)[0]
 
+    def connectsToUV(self, node):
         x_A = self.state.x
         y_A = self.state.y
 
         x_B = node.state.x
         y_B = node.state.y
 
-        if not self.connectsToHelper(x_A, y_A) or not self.connectsToHelper(x_B, y_B):
-            return False
+        if not self.connectsToHelper(x_A, y_A):
+            return False, (int((x_A - GRID_X) / RES), int((y_A - GRID_Y) / RES))
+        elif not self.connectsToHelper(x_B, y_B):
+            return False, (int((x_B - GRID_X) / RES), int((y_B - GRID_Y) / RES))
         else:
             dist = ((x_B - x_A)**2 + (y_B - y_A)**2)**0.5
             x = np.linspace(x_A, x_B, num=dist / D)
             y = np.linspace(y_A, y_B, num=dist / D)
             for i in range(len(x)):
                 if not self.connectsToHelper(x[i], y[i]):
-                    return False
+                    return False, (int((x[i] - GRID_X) / RES), int((y[i] - GRID_Y) / RES))
             
-            return True
+            return True, 
+
 
 
 
@@ -99,6 +98,17 @@ class Node:
         d = math.sqrt((x - p_x)**2 + (y - p_y)**2)
         return d > D_WALL
 
+    def freespaceCost(self):
+        u = int((self.state.x - GRID_X) / RES)
+        v = int((self.state.y - GRID_Y) / RES)
+        denom = np.linalg.norm([u - self.map[(v,u)][0],
+                                v - self.map[(v,u)][1]])
+        if denom == 0:
+            denom = 0.1
+        return 1.0 / denom
+
+
+
 
 def verifyPath(path, wallptmap):
     new_path = []
@@ -107,9 +117,10 @@ def verifyPath(path, wallptmap):
 
     for i in range(len(new_path) - 1):
         # print('checking...')
-        if not new_path[i].connectsTo(new_path[i + 1]):
-            return False
-    return True
+        ret = new_path[i].connectsToUV(new_path[i + 1])
+        if not ret[0]:
+            return ret
+    return True, None
 
 
 #
@@ -157,7 +168,7 @@ def AStar(nodeList, start, goal):
                 child.treeparent  = node
                 child.costToReach = costToReach
                 child.costToGoEst = child.Distance(goal)
-                child.cost        = child.costToReach + child.costToGoEst
+                child.cost        = child.costToReach + child.costToGoEst + child.freespaceCost()
                 bisect.insort(onDeck, child)
                 continue
 
